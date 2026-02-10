@@ -1,4 +1,8 @@
 #%%
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 from data_handling import load_hyperfines_and_susceptibility_tensor, load_observed_pseudocontact_shift_data
 import numpy as np
 from scipy.optimize import minimize, linear_sum_assignment
@@ -288,7 +292,6 @@ best_idx = np.argmin([r['final_loss'] for r in results_list])
 best_result = results_list[best_idx]
 
 
-#%%
 # ----------------------------------------------------------------------
 #
 # POST PROCESSING AND VISUALISATION OF RESULTS

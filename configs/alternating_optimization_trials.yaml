@@ -1,0 +1,25 @@
+# Configuration for alternating optimization with multiple random initializations
+
+experiment:
+  name: "alternating_optimization"
+  description: "Alternating optimization with multiple random assignment initializations"
+
+optimization:
+  n_trials: 100  # Fair comparison with moment matching
+  max_iters: 100
+  tolerance: 1.0e-8
+  optimizer: "trust-constr"
+  
+susceptibility:
+  chi_iso: 0.18013
+  # No chi_init specified - will use random initialization for each trial
+
+random_seed:
+  base_seed: 42
+  use_sequential: true  # Use seeds 0, 1, 2, ... for trials
+
+output:
+  save_results: true
+  results_dir: "results/experiments"
+  save_animations: false
+  verbose: false  # Set to false for faster execution with many trials

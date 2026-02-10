@@ -1,0 +1,28 @@
+# Quick test configuration for moment matching animation
+
+experiment:
+  name: "moment_matching"
+  description: "Quick test to verify animation alignment with true assignment"
+
+optimization:
+  n_trials: 1  # Just one trial for quick testing
+  max_iters: 50
+  tolerance: 1.0e-8
+  optimizer: "trust-constr"
+  
+susceptibility:
+  chi_iso: 0.18013
+
+random_seed:
+  base_seed: 42
+  use_sequential: true
+
+output:
+  save_results: true
+  results_dir: "results/experiments"
+  save_animations: false
+  verbose: true  # Enable verbose to see progress
+
+moment_matching:
+  max_moment: 12
+  use_standardized: true

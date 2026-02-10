@@ -1,0 +1,26 @@
+experiment:
+  name: "quick_noise_test"
+  description: "Quick test of noise sensitivity with 2 levels"
+
+noise:
+  levels: [0.01, 0.10]  # Just 1% and 10% for quick test
+  trials_per_level: 3
+  noise_type: "relative"  # 'relative' or 'absolute'
+  enforce_traceless: true  # Project noisy chi back to traceless manifold
+
+optimization:
+  max_iters: 50
+  tolerance: 1.0e-8
+  optimizer: "trust-constr"  # 'trust-constr' or 'SLSQP'
+
+susceptibility:
+  chi_iso: 0.18013  # From experimental data
+
+random_seed:
+  base_seed: 42
+  use_sequential: false
+
+output:
+  results_dir: "experiments/results"
+  verbose: true
+  save_individual_trials: false  # Set true to save full optimization history

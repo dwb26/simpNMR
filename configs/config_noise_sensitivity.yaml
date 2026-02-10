@@ -1,0 +1,36 @@
+# Noise sensitivity experiment configuration
+
+experiment:
+  name: "noise_sensitivity_chi_init"
+  description: "Test robustness to noisy chi initialization"
+
+noise:
+  # Noise levels to test (as fraction of true chi values)
+  levels: [0.01, 0.10, 1.00, 10.00, 50.00, 100.00, 500.00, 1000.00, 5000.00, 10000.00, 100000.00, 1000000.00]
+  
+  # Number of trials per noise level
+  trials_per_level: 10
+  
+  # Type of noise: 'relative' (% of true value) or 'absolute' (fixed magnitude)
+  noise_type: "relative"
+  
+  # Whether to ensure traceless constraint after adding noise
+  enforce_traceless: true
+
+optimization:
+  max_iters: 50
+  tolerance: 1.0e-8
+  optimizer: "trust-constr"
+  
+susceptibility:
+  chi_iso: 0.18013
+
+random_seed:
+  base_seed: 42
+  use_sequential: true
+
+output:
+  save_results: true
+  results_dir: "experiments/results"
+  save_individual_trials: false  # Save all trials or just summary?
+  verbose: false  # Less verbose for large sweeps

@@ -1,0 +1,3 @@
+Method,Best χ Error,Median χ Error,Mean χ Error,Std χ Error,Mean Time (s),Median Time (s),Success Rate
+Alternating Optimization,5.321852e-06,5.321852e-06,1.181498e-01,1.312720e-01,0.742,0.659,100.0%
+Moment Matching (Moments: 12 (standardized)),1.384071e-05,6.624963e-05,9.798962e-02,1.275220e-01,0.366,0.207,100.0%
