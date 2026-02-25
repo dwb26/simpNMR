@@ -697,6 +697,24 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         
         self.chi = self.vector_to_chi(res.x)
         
+
+"""
+    Update 2024-06-20:
+    
+    AOF works on diag data when the bounds are tight, but struggles to find good solutions when the bounds are relaxed. 
+    The loss landscape becomes more complex and the optimizer gets stuck in local minima. 
+    This is likely because the unconstrained optimization allows for non-physical solutions that can have very low loss but do not correspond to valid susceptibility tensors. 
+    The constraints in the diagonal case help guide the optimization towards physically meaningful regions of parameter space, while the unconstrained case has a much larger search space with many local minima. 
+    This highlights the importance of incorporating physical constraints into the optimization to ensure convergence to valid solutions.
+    
+    Next steps:
+    - Try to get the method working on shift data generated with respect to a non-diagonal chi tensor, 
+      to see if the issue is specific to the unconstrained optimization or if it also affects the diagonal case when the data is more complex.
+      
+    - Another way to debug in this case is to fix the off-diagonal elements to the known values from the true chi tensor, 
+      and only optimize the diagonal elements without constraints. 
+"""
+        
         
 class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
     """
