@@ -10,6 +10,7 @@ import numpy as np
 from scipy.optimize import minimize, linear_sum_assignment
 from typing import Dict, Optional, List
 from numpy.typing import NDArray
+from scipy.linalg import eig
 
 
 def generate_random_chi_diagonal(chi_iso: float = 0.18013, seed: Optional[int] = None) -> NDArray:
@@ -156,7 +157,7 @@ class BaseAlternatingFitter:
         if chi_init is not None:
             self.chi = chi_init.copy()
         else:
-            self.chi = generate_random_chi_diagonal(chi_iso=self.chi_iso)
+            self.chi = generate_random_chi_diagonal(chi_iso=self.chi_iso) #### Diagonal for now
         
         self.max_iters = max_iters
         self.tol = tol
@@ -376,7 +377,7 @@ class BaseAlternatingFitter:
         }
 
 
-class AlternatingOptimizationFitter(BaseAlternatingFitter):
+class DiagAlternatingOptimizationFitter(BaseAlternatingFitter):
     """
     Diagonal chi tensor optimization with axiality/rhombicity constraints.
     
@@ -434,7 +435,7 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         return loss_val
     
     
-    def orientation_via_axiality_constraint(self, chi_diag: NDArray) -> List[float]:
+    def diag_orientation_via_axiality_constraint(self, chi_diag: NDArray) -> List[float]:
         """
         Inequality constraint: -chi_iso < chi_z < 2*chi_iso
         
@@ -444,7 +445,7 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         return [chi_z + self.chi_iso, 2*self.chi_iso - chi_z]
     
     
-    def orientation_rhombicity_constraint(self, chi_diag: NDArray) -> List[float]:
+    def diag_orientation_rhombicity_constraint(self, chi_diag: NDArray) -> List[float]:
         """
         Inequality constraint: 0 < (chi_x - chi_y)/chi_z < 1 (rhombicity)
         
@@ -475,8 +476,8 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         """
         constraints = [
             {'type': 'eq', 'fun': self.trace_constraint},
-            {'type': 'ineq', 'fun': self.orientation_via_axiality_constraint},
-            {'type': 'ineq', 'fun': self.orientation_rhombicity_constraint}
+            {'type': 'ineq', 'fun': self.diag_orientation_via_axiality_constraint},
+            {'type': 'ineq', 'fun': self.diag_orientation_rhombicity_constraint}
         ]
         
         def callback(chi_k, _):
@@ -500,7 +501,204 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         self.chi = np.diag(res.x)
         
         
-class MomentMatchingFitter(AlternatingOptimizationFitter):
+class AlternatingOptimizationFitter(BaseAlternatingFitter):
+# class AlternatingOptimizationFitter(DiagAlternatingOptimizationFitter):
+    """
+    Alternating optimization with unconstrained diagonal chi tensor.
+    
+    This implementation optimizes the three diagonal components of χ without
+    explicit constraints, relying on the loss function to guide towards valid
+    solutions. This is a simpler baseline that can be compared against the
+    constrained version.
+    
+    Forward model: δ_pc = (1/3) * Tr(A @ χ)
+    
+    Inherits the alternating optimization framework from BaseAlternatingFitter.
+    """    
+    
+    def forward_model(self, chi: NDArray) -> NDArray:
+        """
+        Compute predicted pseudocontact shifts using chi tensor.
+        
+        Uses the formula: δ_pc = (1/3) * Tr(A @ χ)
+        
+        Parameters
+        ----------
+        chi : NDArray
+            Susceptibility tensor (3x3 diagonal)
+            
+        Returns
+        -------
+        NDArray
+            Predicted pseudocontact shifts for all atoms
+        """
+        y_hat = np.array([
+            (1/3) * np.trace(self.hyperfines_dict[label] @ chi)
+            for label in self.atom_labels
+        ])
+        return y_hat
+    
+    
+    def loss_fn(self, chi_vec: NDArray) -> float:
+        """
+        Loss function: mean squared error between predicted and observed shifts.
+        
+        Parameters
+        ----------
+        chi_vec : NDArray
+            Upper triangular part of chi tensor (flattened)
+            
+        Returns
+        -------
+        float
+            Mean squared error
+        """
+        chi_hat = self.vector_to_chi(chi_vec)
+        y_hat = self.forward_model(chi_hat)
+        loss_val = np.mean((y_hat - self.observed_shifts)**2)
+        return loss_val
+
+
+    def vector_to_chi(self, vector: NDArray) -> NDArray:
+        """
+        Convert upper triangular vector to full chi tensor.
+        
+        Parameters
+        ----------
+        vector : NDArray
+            Upper triangular part of chi tensor (flattened)
+            
+        Returns
+        -------
+        NDArray
+            Full 3x3 chi tensor
+        """    
+        chi = np.zeros((3, 3))
+        
+        chi[0, 0] = vector[0]
+        chi[1, 1] = vector[1]
+        chi[2, 2] = vector[2]
+        chi[0, 1] = vector[3]
+        chi[1, 2] = vector[4]
+        chi[0, 2] = vector[5]
+        
+        chi[1, 0] = chi[0, 1]
+        chi[2, 1] = chi[1, 2]
+        chi[2, 0] = chi[0, 2]            
+        return chi
+    
+    
+    def map_to_sorted_eigs(self, chi_diag: NDArray) -> NDArray:
+        """
+        Map diagonal chi tensor to eigenvalues.
+        
+        Parameters
+        ----------
+        chi_diag : NDArray
+            Diagonal elements of chi tensor [chi_x, chi_y, chi_z]
+            
+        Returns
+        -------
+        NDArray
+            Eigenvalues of chi tensor (sorted in ascending order)
+        """
+        chi = self.vector_to_chi(chi_diag)
+        eigs, _ = eig(chi)
+        eigs = np.real(eigs)  # Ensure we are working with real eigenvalues
+        abs_eigs = np.abs(eigs)
+        sorted_indices = np.argsort(abs_eigs)
+        return eigs[sorted_indices]
+    
+    
+    def orientation_via_axiality_constraint(self, chi_vec: NDArray) -> List[float]:
+        """
+        Inequality constraint: -1.5*chi_iso < Δchi_ax < 3*chi_iso
+        
+        Returns positive values when constraint is satisfied.
+        """
+        _, _, delta_chi_z = self.map_to_sorted_eigs(chi_vec)
+        delta_chi_ax = 1.5 * delta_chi_z
+        return [delta_chi_ax + 1.5 * self.chi_iso,  3 * self.chi_iso - delta_chi_ax]
+    
+    
+    def orientation_rhombicity_constraint(self, chi_vec: NDArray) -> List[float]:
+        """
+        Inequality constraint: 0 < Δchi_rho/Δchi_ax < 1/3 (rhombicity)
+        
+        Returns positive values when constraint is satisfied.
+        """
+        delta_chi_x, delta_chi_y, delta_chi_z = self.map_to_sorted_eigs(chi_vec)
+        
+        delta_chi_ax = 1.5 * delta_chi_z
+        delta_chi_rho = 0.5 * (delta_chi_x - delta_chi_y)
+        
+        ratio = delta_chi_rho / delta_chi_ax if delta_chi_ax != 0 else 0.0
+        return [ratio, 1/3 - ratio]
+    
+    
+    def trace_constraint(self, chi_vec: NDArray) -> List[float]:
+        """
+        Equality constraint: Tr(chi) = 0 (traceless tensor)
+        
+        Returns zero when constraint is satisfied.
+        """
+        chi_diag = np.diag(self.vector_to_chi(chi_vec))
+        return [chi_diag[0] + chi_diag[1] + chi_diag[2]]
+    
+    
+    def fit_chi(self) -> None:
+        """
+        Optimize diagonal chi tensor without explicit constraints.
+        
+        Minimizes the loss function with respect to the diagonal elements of χ.
+        """
+        constraints = [
+            {'type': 'eq', 'fun': self.trace_constraint},
+            {'type': 'ineq', 'fun': self.orientation_via_axiality_constraint},
+            {'type': 'ineq', 'fun': self.orientation_rhombicity_constraint}
+        ]
+        
+        # Pin off-diagonal elements to zero so the 6-param optimisation
+        # is mathematically equivalent to the 3-param diagonal case.
+        bounds = [(None, None)] * 3 + [(0.0, 0.0)] * 3
+        
+        def callback(chi_k, _):
+            self.chi_record.append({
+                'step': 'chi_optimization',
+                'chi': self.vector_to_chi(chi_k),
+                'predicted_shifts': self.forward_model(self.vector_to_chi(chi_k)),
+                'observed': self.observed_shifts.copy(),
+                'loss': self.loss_fn(chi_k)
+            })
+        
+        # We need to map the upper triangular part of the chi tensor to a vector for optimization
+        def chi_to_vector(chi):
+            diag_0 = np.diag(chi)
+            diag_1 = np.diag(chi, k=1)
+            diag_2 = np.diag(chi, k=2)
+            return np.concatenate([diag_0, diag_1, diag_2])
+        
+        # res = minimize(
+        #     self.loss_fn, 
+        #     x0=chi_to_vector(self.chi),
+        #     method=self.optimizer,
+        #     constraints=constraints,
+        #     bounds=bounds,
+        #     callback=callback
+        # )
+        res = minimize(
+            self.loss_fn, 
+            x0=chi_to_vector(self.chi),
+            method=self.optimizer,
+            constraints=constraints,
+            callback=callback
+        )
+        self.converged = res.success
+        
+        self.chi = self.vector_to_chi(res.x)
+        
+        
+class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
     """
     Fits for the susceptibility tensor by fitting for the probabilistic moments of the pseduocontact shifts.
     

@@ -93,6 +93,9 @@ def load_hyperfines_and_susceptibility_tensor(verbose=False) -> tuple[dict[str, 
     # Load data
     hyperfines_df = pd.read_csv(DATA_DIR / 'hyperfines_and_shifts_298.00_K.csv')
     susceptibility_tensor_df = pd.read_excel(DATA_DIR / 'susceptibility_tensor.xlsx')
+
+    # hyperfines_df = pd.read_excel(DATA_DIR / 'non_diagonal_chi_hyperfines_and_shifts_302.15K.xlsx')
+    # susceptibility_tensor_df = pd.read_excel(DATA_DIR / 'non_diagonal_chi_susceptibility_tensor.xlsx')
     
     # Read in susceptibility chi from file instead of hardcoding
     chi_tensor = _build_susceptibility_tensor(susceptibility_tensor_df.iloc[0])
@@ -123,6 +126,7 @@ def load_observed_pseudocontact_shift_data() -> dict[str, float]:
     """
     # Read in the hyperfines and shifts file
     hyperfines_and_shifts_df = pd.read_csv(DATA_DIR / 'hyperfines_and_shifts_298.00_K.csv')
+    # hyperfines_and_shifts_df = pd.read_excel(DATA_DIR / 'non_diagonal_chi_hyperfines_and_shifts_302.15K.xlsx')
     
     delta_pc_dict = {}
     for _, row in hyperfines_and_shifts_df.iterrows():
@@ -132,4 +136,24 @@ def load_observed_pseudocontact_shift_data() -> dict[str, float]:
     
     return delta_pc_dict
 
+# print("Loading hyperfine tensors and susceptibility tensor...")
 # ht_dict, chi = load_hyperfines_and_susceptibility_tensor()
+
+# print("Loading observed pseudocontact shift data...")
+# delta_pc_dict = load_observed_pseudocontact_shift_data()
+
+# print("Checking results...")
+# for atom, tensor in ht_dict.items():
+#     print(f"{atom}:\n{tensor}\n")
+    
+#     # Apply the hfc tensor to the susceptibility tensor to check for consistency
+#     delta_i_hat = (1/3) * np.trace(chi @ tensor)
+    
+#     # Observed delta
+#     delta_i = delta_pc_dict[atom]
+    
+#     print(f"Computed δ_i_hat for {atom}: {delta_i_hat}")
+#     print(f"Observed δ_i for {atom}: {delta_i}\n")
+    
+# print("Loaded susceptibility tensor χ:")
+# print(chi)

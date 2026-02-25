@@ -435,6 +435,12 @@ def main():
                     fps=2,
                     use_standardized=True
                 )
+            elif experiment_name == "diag_alternating_optimization":
+                create_animation(
+                    best_result['frame_data'],
+                    output_file=str(animation_file),
+                    fps=2
+                )
         except Exception as e:
             print(f"Warning: Animation creation failed: {e}")
     else:
