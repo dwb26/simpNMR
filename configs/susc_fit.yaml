@@ -1,14 +1,14 @@
 # Default configuration for alternating optimization experiments
 
 experiment:
-  name: "alternating_optimization" # Options: 'alternating_optimization', 'moment_matching', diag_alternating_optimization
+  # name: "alternating_optimization" # Options: 'alternating_optimization', 'moment_matching', diag_alternating_optimization
   # name: "moment_matching"
-  # name: "diag_alternating_optimization"
+  name: "diag_alternating_optimization"
   description: "Baseline experiment with multiple random initializations"
 
 optimization:
-  n_trials: 10
-  max_iters: 20
+  n_trials: 1
+  max_iters: 50
   tolerance: 1.0e-8
   optimizer: "trust-constr"  # Options: 'trust-constr', 'SLSQP'
   

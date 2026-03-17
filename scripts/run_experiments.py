@@ -180,15 +180,6 @@ def run_chi_fit_experiment(config: Dict) -> Dict[str, Any]:
         # suitable for MomentMatchingFitter's dedicated animation function.
         result['frame_data'] = fitter.chi_record if optimizer_class == MomentMatchingFitter else fitter.frame_data
         
-        # Validate constraints
-        # chi_diag = np.diag(result['chi']) ####
-        # constraints_valid = validate_constraints(chi_diag, fitter)
-        # chi = result['chi']; print(f"The shape of chi is: {chi.shape}")
-        # constraints_valid = validate_constraints(result['chi'], fitter)
-        
-        # if not constraints_valid:
-            # print(f"  WARNING: Trial {trial + 1}: Constraints violated!")
-        
         # Compute metrics
         metrics = compute_metrics(result, chi_true)
         metrics['seed'] = seed

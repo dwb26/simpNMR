@@ -118,7 +118,8 @@ class BaseAlternatingFitter:
         chi_init: Optional[NDArray] = None, 
         max_iters: int = 50, 
         tol: float = 1e-6,
-        optimizer: str = 'trust-constr'
+        optimizer: str = 'trust-constr',
+        max_n_attempts: int = 50
     ):
         """
         Initialize the alternating optimization fitter.
@@ -139,6 +140,8 @@ class BaseAlternatingFitter:
             Convergence tolerance for loss change
         optimizer : str, default='trust-constr'
             Scipy optimizer to use ('trust-constr', 'SLSQP', etc.)
+        max_n_attempts : int, default=50
+            Maximum number of attempts to achieve desired R²
         """
         self.atom_labels = list(delta_pc_dict.keys())
         self.N_atoms = len(self.atom_labels)
@@ -146,11 +149,8 @@ class BaseAlternatingFitter:
         
         # Store original hyperfines as list (we'll permute these)
         self.hyperfine_tensors_original = [hyperfines_dict[label] for label in self.atom_labels]
-        
-        # Initialize with random permutation to model unknown assignment scenario
         self.current_permutation = np.random.permutation(len(self.atom_labels))
         self.hyperfines_dict = self._build_assignment(self.current_permutation)
-        
         self.chi_iso = chi_iso if chi_iso is not None else 0.0
         
         # Initialize chi tensor with random valid values if not provided
@@ -162,6 +162,7 @@ class BaseAlternatingFitter:
         self.max_iters = max_iters
         self.tol = tol
         self.optimizer = optimizer
+        self.max_n_attempts = max_n_attempts
         
         # Track convergence
         self.loss_history: List[float] = []
@@ -251,6 +252,16 @@ class BaseAlternatingFitter:
         return np.mean((y_hat - self.observed_shifts)**2)
     
     
+    def compute_r2(self, predicted_shifts):
+        # ss_res (sum of squared residual errors)
+        ss_res = np.sum((self.observed_shifts - predicted_shifts)**2)
+        
+        # ss_tot: variance of observed shifts around their mean
+        mean_of_obs = np.mean(self.observed_shifts)
+        ss_tot = np.sum((self.observed_shifts - mean_of_obs)**2)
+        return 1 - ss_res / ss_tot
+    
+    
     def fit(self, verbose: bool = False) -> dict:
         """
         Run alternating optimisation until convergence.
@@ -273,88 +284,193 @@ class BaseAlternatingFitter:
             - 'final_loss': Final loss value
             - 'n_iterations': Number of iterations performed
         """
-        # Store initial state
-        predicted_shifts_init = self.forward_model(self.chi)
-        initial_loss = self._compute_current_loss()
-        self.frame_data.append({
-            'iteration': 0,
-            'step': 'initial',
-            'chi': self.chi.copy(),
-            'assignment': self.current_permutation.copy(),
-            'predicted': predicted_shifts_init.copy(),
-            'observed': self.observed_shifts.copy(),
-            'loss': initial_loss
-        })
+            
+        r2_records: list[float] = []
+        assignment_records: list[list[str]] = []
+        chi_records: list[NDArray] = []
         
-        if verbose:
-            print(f"Initial loss: {initial_loss:.6e}")
-        
-        for iteration in range(self.max_iters):
+        best_r2 = 0.0
+        attempt = 0
+        r2_threshold = 0.98
+        max_n_iterations = 100
+        while best_r2 < r2_threshold and attempt < self.max_n_attempts:
             
-            # Step 1: Optimize χ given assignment
-            self.fit_chi()
-            loss_after_chi = self._compute_current_loss()
+            print(f"\nRunning for attempt {attempt+1} / {self.max_n_attempts}")
             
-            # Store frame after chi optimization
-            predicted_shifts_chi = self.forward_model(self.chi)
-            self.frame_data.append({
-                'iteration': iteration + 1,
-                'step': 'chi_optimized',
-                'chi': self.chi.copy(),
-                'assignment': self.current_permutation.copy(),
-                'predicted': predicted_shifts_chi.copy(),
-                'observed': self.observed_shifts.copy(),
-                'loss': loss_after_chi
-            })
+            # Start with a different random permutation on each attempt
+            self.current_permutation = np.random.permutation(len(self.atom_labels))
+            self.hyperfines_dict = self._build_assignment(self.current_permutation)
+            current_assignment = self.current_permutation.copy()
             
-            # Step 2: Optimize assignment given χ
-            new_assignment = self.optimize_assignment()
-            loss_after_assignment = self._compute_current_loss()
-            
-            # Store frame after assignment optimization
-            predicted_shifts_assign = self.forward_model(self.chi)
-            self.frame_data.append({
-                'iteration': iteration + 1,
-                'step': 'assignment_optimized',
-                'chi': self.chi.copy(),
-                'assignment': new_assignment.copy(),
-                'predicted': predicted_shifts_assign.copy(),
-                'observed': self.observed_shifts.copy(),
-                'loss': loss_after_assignment
-            })
-            
-            # Track history
-            self.loss_history.append(loss_after_assignment)
-            self.assignment_history.append(new_assignment.copy())
-            self.chi_history.append(self.chi.copy())
-            
-            if verbose:
-                print(f"Iteration {iteration+1}: Loss = {loss_after_assignment:.6e}")
-            
-            # Check convergence
-            if iteration > 0:
-                loss_change = abs(self.loss_history[-2] - self.loss_history[-1])
-                if loss_change < self.tol:
-                    if verbose:
-                        print(f"Converged after {iteration+1} iterations")
+            converged = False
+            for iteration in range(max_n_iterations):
+                
+                print(f"Running for iteration {iteration+1} / {max_n_iterations}")
+                
+                # ---- Step 1: Optimize χ given assignment ------------
+                self.fit_chi()
+                loss_after_chi = self._compute_current_loss()
+                
+                # Store frame after chi optimization
+                predicted_shifts_chi = self.forward_model(self.chi)
+                self.frame_data.append({
+                    'iteration': iteration + 1,
+                    'step': 'chi_optimized',
+                    'chi': self.chi.copy(),
+                    'assignment': self.current_permutation.copy(),
+                    'predicted': predicted_shifts_chi.copy(),
+                    'observed': self.observed_shifts.copy(),
+                    'loss': loss_after_chi
+                })
+                
+                # ---- Step 2: Optimize assignment given χ ------------
+                new_assignment = self.optimize_assignment()
+                loss_after_assignment = self._compute_current_loss()
+                
+                # Store frame after assignment optimization
+                predicted_shifts_assign = self.forward_model(self.chi)
+                self.frame_data.append({
+                        'iteration': iteration + 1,
+                        'step': 'assignment_optimized',
+                        'chi': self.chi.copy(),
+                        'assignment': new_assignment.copy(),
+                        'predicted': predicted_shifts_assign.copy(),
+                        'observed': self.observed_shifts.copy(),
+                        'loss': loss_after_assignment
+                    })
+                
+                # Track history
+                self.loss_history.append(loss_after_assignment)
+                self.assignment_history.append(new_assignment.copy())
+                self.chi_history.append(self.chi.copy())
+                
+                # Check for convergence
+                if list(new_assignment) == list(current_assignment):
+                    converged = True
                     break
+                
+                current_assignment = new_assignment.copy()
+            
+            # Only record and update best_r2 when the attempt converged.
+            # If max_iter was hit without convergence, susc_model state is
+            # unreliable so we discard this attempt entirely.
+            if converged:
+                r2 = self.compute_r2(predicted_shifts_assign)
+                loss_this_attempt = self._compute_current_loss()
+                r2_records.append(r2)
+                assignment_records.append(new_assignment)
+                chi_records.append(self.chi.copy())
+                if r2 > best_r2:
+                    best_r2 = r2
+                print(f"  Attempt {attempt+1} converged: R²={r2:.6f}, loss={loss_this_attempt:.6e} (best R² so far: {best_r2:.6f})")
+            attempt += 1
+            
+        best_idx = int(np.argmax(r2_records))
+        best_assignment = assignment_records[best_idx]
+        self.chi = chi_records[best_idx]
+        self.hyperfines_dict = self._build_assignment(best_assignment)
+
+        # Recompute loss using the restored best chi + assignment
+        best_final_loss = self._compute_current_loss()
         
-        # Build final assignment dict for interpretation
         final_assignment_dict = {
-            self.atom_labels[i]: self.atom_labels[self.current_permutation[i]]
+            self.atom_labels[i]: self.atom_labels[best_assignment[i]]
             for i in range(self.N_atoms)
         }
         
         return {
             'chi': self.chi,
-            'assignment': self.current_permutation,
+            'assignment': best_assignment,
             'assignment_dict': final_assignment_dict,
             'loss_history': self.loss_history,
             'chi_history': self.chi_history,
-            'converged': iteration < self.max_iters - 1,
-            'final_loss': self.loss_history[-1],
+            'converged': True,
+            'final_loss': best_final_loss,
             'n_iterations': len(self.loss_history)
         }
+        
+        # Store initial state
+        # predicted_shifts_init = self.forward_model(self.chi)
+        # initial_loss = self._compute_current_loss()
+        # self.frame_data.append({
+        #     'iteration': 0,
+        #     'step': 'initial',
+        #     'chi': self.chi.copy(),
+        #     'assignment': self.current_permutation.copy(),
+        #     'predicted': predicted_shifts_init.copy(),
+        #     'observed': self.observed_shifts.copy(),
+        #     'loss': initial_loss
+        # })
+        
+        # if verbose:
+        #     print(f"Initial loss: {initial_loss:.6e}")
+            
+        # for iteration in range(self.max_iters):
+            
+        #     # Step 1: Optimize χ given assignment
+        #     self.fit_chi()
+        #     loss_after_chi = self._compute_current_loss()
+            
+        #     # Store frame after chi optimization
+        #     predicted_shifts_chi = self.forward_model(self.chi)
+        #     self.frame_data.append({
+        #         'iteration': iteration + 1,
+        #         'step': 'chi_optimized',
+        #         'chi': self.chi.copy(),
+        #         'assignment': self.current_permutation.copy(),
+        #         'predicted': predicted_shifts_chi.copy(),
+        #         'observed': self.observed_shifts.copy(),
+        #         'loss': loss_after_chi
+        #     })
+            
+        #     # Step 2: Optimize assignment given χ
+        #     new_assignment = self.optimize_assignment()
+        #     loss_after_assignment = self._compute_current_loss()
+            
+        #     # Store frame after assignment optimization
+        #     predicted_shifts_assign = self.forward_model(self.chi)
+        #     self.frame_data.append({
+        #         'iteration': iteration + 1,
+        #         'step': 'assignment_optimized',
+        #         'chi': self.chi.copy(),
+        #         'assignment': new_assignment.copy(),
+        #         'predicted': predicted_shifts_assign.copy(),
+        #         'observed': self.observed_shifts.copy(),
+        #         'loss': loss_after_assignment
+        #     })
+            
+        #     # Track history
+        #     self.loss_history.append(loss_after_assignment)
+        #     self.assignment_history.append(new_assignment.copy())
+        #     self.chi_history.append(self.chi.copy())
+            
+        #     if verbose:
+        #         print(f"Iteration {iteration+1}: Loss = {loss_after_assignment:.6e}")
+            
+        #     # Check convergence
+        #     if iteration > 0:
+        #         loss_change = abs(self.loss_history[-2] - self.loss_history[-1])
+        #         if loss_change < self.tol:
+        #             if verbose:
+        #                 print(f"Converged after {iteration+1} iterations")
+        #             break        
+        
+        # # Build final assignment dict for interpretation
+        # final_assignment_dict = {
+        #     self.atom_labels[i]: self.atom_labels[self.current_permutation[i]]
+        #     for i in range(self.N_atoms)
+        # }
+        
+        # return {
+        #     'chi': self.chi,
+        #     'assignment': self.current_permutation,
+        #     'assignment_dict': final_assignment_dict,
+        #     'loss_history': self.loss_history,
+        #     'chi_history': self.chi_history,
+        #     'converged': iteration < self.max_iters - 1,
+        #     'final_loss': self.loss_history[-1],
+        #     'n_iterations': len(self.loss_history)
+        # }
     
     
     def _build_assignment(self, permutation: NDArray) -> Dict[str, NDArray]:
@@ -387,7 +503,7 @@ class DiagAlternatingOptimizationFitter(BaseAlternatingFitter):
     - Axiality bounds: -chi_iso < chi_z < 2*chi_iso
     - Rhombicity bounds: 0 < (chi_x - chi_y)/chi_z < 1
     
-    Forward model: δ_pc = (1/3) * Tr(A @ χ)
+    Forward model: δ_pc = (1/3) * Tr(χ @ A)
     
     Inherits the alternating optimization framework from BaseAlternatingFitter.
     """    
@@ -409,7 +525,7 @@ class DiagAlternatingOptimizationFitter(BaseAlternatingFitter):
             Predicted pseudocontact shifts for all atoms
         """
         y_hat = np.array([
-            (1/3) * np.trace(self.hyperfines_dict[label] @ chi)
+            (1/3) * np.trace(chi @ self.hyperfines_dict[label])
             for label in self.atom_labels
         ])
         return y_hat
@@ -502,7 +618,6 @@ class DiagAlternatingOptimizationFitter(BaseAlternatingFitter):
         
         
 class AlternatingOptimizationFitter(BaseAlternatingFitter):
-# class AlternatingOptimizationFitter(DiagAlternatingOptimizationFitter):
     """
     Alternating optimization with unconstrained diagonal chi tensor.
     
@@ -511,7 +626,7 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
     solutions. This is a simpler baseline that can be compared against the
     constrained version.
     
-    Forward model: δ_pc = (1/3) * Tr(A @ χ)
+    Forward model: δ_pc = (1/3) * Tr(χ @ A)
     
     Inherits the alternating optimization framework from BaseAlternatingFitter.
     """    
@@ -520,7 +635,7 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         """
         Compute predicted pseudocontact shifts using chi tensor.
         
-        Uses the formula: δ_pc = (1/3) * Tr(A @ χ)
+        Uses the formula: δ_pc = (1/3) * Tr(χ @ A)
         
         Parameters
         ----------
@@ -533,7 +648,7 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
             Predicted pseudocontact shifts for all atoms
         """
         y_hat = np.array([
-            (1/3) * np.trace(self.hyperfines_dict[label] @ chi)
+            (1/3) * np.trace(chi @ self.hyperfines_dict[label])
             for label in self.atom_labels
         ])
         return y_hat
@@ -652,15 +767,41 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         
         Minimizes the loss function with respect to the diagonal elements of χ.
         """
+        # As a DEBUG, hard code the off diag terms and see if the diag terms converge
+        # self.chi[0, 1] = 0.01439
+        # self.chi[0, 2] = -0.03708
+        # self.chi[1, 2] = -0.00083
+        # self.chi[1, 0] = self.chi[0, 1]
+        # self.chi[2, 0] = self.chi[0, 2]
+        # self.chi[2, 1] = self.chi[1, 2]
+        
+        # Now try the alternative, where the diag is known and we optimize the off diag terms
+        # self.chi[0, 0] = -0.01973
+        # self.chi[1, 1] = -0.04088
+        # self.chi[2, 2] = 0.06061
+        
+        # Perturb the off-diagonal elements so they are not 0
+        self.chi[0, 1] = np.random.uniform(-0.05, 0.05)
+        self.chi[0, 2] = np.random.uniform(-0.05, 0.05)
+        self.chi[1, 2] = np.random.uniform(-0.05, 0.05)
+        
+        # Ensure symmetry
+        # self.chi[1, 0] = self.chi[0, 1]
+        # self.chi[2, 0] = self.chi[0, 2]
+        # self.chi[2, 1] = self.chi[1, 2]
+        
         constraints = [
             {'type': 'eq', 'fun': self.trace_constraint},
             {'type': 'ineq', 'fun': self.orientation_via_axiality_constraint},
             {'type': 'ineq', 'fun': self.orientation_rhombicity_constraint}
         ]
         
-        # Pin off-diagonal elements to zero so the 6-param optimisation
-        # is mathematically equivalent to the 3-param diagonal case.
-        bounds = [(None, None)] * 3 + [(0.0, 0.0)] * 3
+        # Pin off-diagonal elements to their true values so the optimizer only
+        # searches over the 3 diagonal components.
+        # chi_01, chi_12, chi_02 = self.chi[0, 1], self.chi[1, 2], self.chi[0, 2]
+        # bounds = [(None, None)] * 3 + [(chi_01, chi_01), (chi_12, chi_12), (chi_02, chi_02)]
+        # chi_00, chi_11, chi_22 = self.chi[0, 0], self.chi[1, 1], self.chi[2, 2]
+        # bounds = [(chi_00, chi_00), (chi_11, chi_11), (chi_22, chi_22)] + [(None, None)] * 3
         
         def callback(chi_k, _):
             self.chi_record.append({
@@ -678,14 +819,6 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
             diag_2 = np.diag(chi, k=2)
             return np.concatenate([diag_0, diag_1, diag_2])
         
-        # res = minimize(
-        #     self.loss_fn, 
-        #     x0=chi_to_vector(self.chi),
-        #     method=self.optimizer,
-        #     constraints=constraints,
-        #     bounds=bounds,
-        #     callback=callback
-        # )
         res = minimize(
             self.loss_fn, 
             x0=chi_to_vector(self.chi),
@@ -696,24 +829,6 @@ class AlternatingOptimizationFitter(BaseAlternatingFitter):
         self.converged = res.success
         
         self.chi = self.vector_to_chi(res.x)
-        
-
-"""
-    Update 2024-06-20:
-    
-    AOF works on diag data when the bounds are tight, but struggles to find good solutions when the bounds are relaxed. 
-    The loss landscape becomes more complex and the optimizer gets stuck in local minima. 
-    This is likely because the unconstrained optimization allows for non-physical solutions that can have very low loss but do not correspond to valid susceptibility tensors. 
-    The constraints in the diagonal case help guide the optimization towards physically meaningful regions of parameter space, while the unconstrained case has a much larger search space with many local minima. 
-    This highlights the importance of incorporating physical constraints into the optimization to ensure convergence to valid solutions.
-    
-    Next steps:
-    - Try to get the method working on shift data generated with respect to a non-diagonal chi tensor, 
-      to see if the issue is specific to the unconstrained optimization or if it also affects the diagonal case when the data is more complex.
-      
-    - Another way to debug in this case is to fix the off-diagonal elements to the known values from the true chi tensor, 
-      and only optimize the diagonal elements without constraints. 
-"""
         
         
 class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
@@ -879,7 +994,7 @@ class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
         
         # Compute the empirical moments of the predicted shifts
         delta_hat = np.array([
-            (1/3) * np.trace(self.hyperfines_dict[label] @ chi)
+            (1/3) * np.trace(chi @ self.hyperfines_dict[label])
             for label in self.atom_labels
         ])
         
@@ -919,14 +1034,14 @@ class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
             # Compute predicted shifts using TRUE assignment (for left animation)
             # This shows how well the fitted chi matches the observations when assignment is correct
             predicted_shifts = np.array([
-                (1/3) * np.trace(self.true_hyperfines_dict[label] @ chi_current)
+                (1/3) * np.trace(chi_current @ self.true_hyperfines_dict[label])
                 for label in self.atom_labels
             ])
             
             # Compute predicted moments using the permuted hyperfines (for fitting)
             # The optimization still fits based on moment matching without knowing assignment
             predicted_shifts_permuted = np.array([
-                (1/3) * np.trace(self.hyperfines_dict[label] @ chi_current)
+                (1/3) * np.trace(chi_current @ self.hyperfines_dict[label])
                 for label in self.atom_labels
             ])
             
@@ -971,7 +1086,7 @@ class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
         """
         # Compute initial predictions using TRUE assignment for visualization
         predicted_shifts_init = np.array([
-            (1/3) * np.trace(self.true_hyperfines_dict[label] @ self.chi)
+            (1/3) * np.trace(self.chi @ self.true_hyperfines_dict[label])
             for label in self.atom_labels
         ])
         
@@ -1013,3 +1128,88 @@ class MomentMatchingFitter(DiagAlternatingOptimizationFitter):
             'final_loss': loss_after_chi,
             'n_iterations': 1            
         }
+        
+        
+
+        # Store initial state
+        # predicted_shifts_init = self.forward_model(self.chi)
+        # initial_loss = self._compute_current_loss()
+        # self.frame_data.append({
+        #     'iteration': 0,
+        #     'step': 'initial',
+        #     'chi': self.chi.copy(),
+        #     'assignment': self.current_permutation.copy(),
+        #     'predicted': predicted_shifts_init.copy(),
+        #     'observed': self.observed_shifts.copy(),
+        #     'loss': initial_loss
+        # })
+        
+        # if verbose:
+            # print(f"Initial loss: {initial_loss:.6e}")
+            
+        # for iteration in range(self.max_iters):
+            
+        #     # Step 1: Optimize χ given assignment
+        #     self.fit_chi()
+        #     loss_after_chi = self._compute_current_loss()
+            
+        #     # Store frame after chi optimization
+        #     predicted_shifts_chi = self.forward_model(self.chi)
+        #     self.frame_data.append({
+        #         'iteration': iteration + 1,
+        #         'step': 'chi_optimized',
+        #         'chi': self.chi.copy(),
+        #         'assignment': self.current_permutation.copy(),
+        #         'predicted': predicted_shifts_chi.copy(),
+        #         'observed': self.observed_shifts.copy(),
+        #         'loss': loss_after_chi
+        #     })
+            
+        #     # Step 2: Optimize assignment given χ
+        #     new_assignment = self.optimize_assignment()
+        #     loss_after_assignment = self._compute_current_loss()
+            
+        #     # Store frame after assignment optimization
+        #     predicted_shifts_assign = self.forward_model(self.chi)
+        #     self.frame_data.append({
+        #         'iteration': iteration + 1,
+        #         'step': 'assignment_optimized',
+        #         'chi': self.chi.copy(),
+        #         'assignment': new_assignment.copy(),
+        #         'predicted': predicted_shifts_assign.copy(),
+        #         'observed': self.observed_shifts.copy(),
+        #         'loss': loss_after_assignment
+        #     })
+            
+        #     # Track history
+        #     self.loss_history.append(loss_after_assignment)
+        #     self.assignment_history.append(new_assignment.copy())
+        #     self.chi_history.append(self.chi.copy())
+            
+        #     if verbose:
+        #         print(f"Iteration {iteration+1}: Loss = {loss_after_assignment:.6e}")
+            
+        #     # Check convergence
+        #     if iteration > 0:
+        #         loss_change = abs(self.loss_history[-2] - self.loss_history[-1])
+        #         if loss_change < self.tol:
+        #             if verbose:
+        #                 print(f"Converged after {iteration+1} iterations")
+        #             break        
+        
+        # Build final assignment dict for interpretation
+        # final_assignment_dict = {
+        #     self.atom_labels[i]: self.atom_labels[self.current_permutation[i]]
+        #     for i in range(self.N_atoms)
+        # }
+        
+        # return {
+        #     'chi': self.chi,
+        #     'assignment': self.current_permutation,
+        #     'assignment_dict': final_assignment_dict,
+        #     'loss_history': self.loss_history,
+        #     'chi_history': self.chi_history,
+        #     'converged': iteration < self.max_iters - 1,
+        #     'final_loss': self.loss_history[-1],
+        #     'n_iterations': len(self.loss_history)
+        # }
